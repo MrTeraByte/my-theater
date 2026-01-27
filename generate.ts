@@ -11,7 +11,6 @@ const s3Client = new S3Client({
 });
 
 async function build() {
-  // Fetch files from R2
   const response = await s3Client.send(new ListObjectsV2Command({ Bucket: process.env.R2_BUCKET_NAME }));
   const movies = response.Contents?.filter(f => !f.Key?.endsWith('/')) || [];
   
@@ -19,14 +18,13 @@ async function build() {
     const videoUrl = `${process.env.R2_PUBLIC_URL}/${m.Key}`;
     const fileName = m.Key || "Unknown File";
     
-    // We can still try to guess the MIME type for better TV support
     const ext = m.Key?.split('.').pop()?.toLowerCase();
-    let type = "video/mp4"; // Default fallback
+    let type = "video/mp4"; 
     if (ext === 'mkv') type = "video/x-matroska";
     if (ext === 'webm') type = "video/webm";
 
-    return `<a href="${videoUrl}" data-type="${type}" class="movie-link" onclick="playVideo(this.href, this.getAttribute('data-type')); return false;">${fileName}</a>`;
-  }).join('<br>');
+    return `<a href="${videoUrl}" class="movie-link" onclick="playVideo('${videoUrl}'); return false;">${fileName}</a>`;
+  }).join('');
 
   const html = `
 <!DOCTYPE html>
@@ -38,61 +36,108 @@ async function build() {
             background: #1a1a1a; 
             color: #ffffff; 
             font-family: Arial, sans-serif; 
-            text-align: center; 
-            padding-top: 20px; 
+            margin: 0;
+            padding: 20px;
         }
-        #player-wrapper {
-            margin-bottom: 30px;
+        /* Using table layout for best compatibility on old browsers */
+        .main-container {
+            display: table;
+            width: 100%;
+            border-spacing: 20px 0;
         }
-        /* Fixed width as requested */
+        .column {
+            display: table-cell;
+            vertical-align: top;
+        }
+        #left-col {
+            width: 70%;
+        }
+        #right-col {
+            width: 30%;
+            background: #222;
+            padding: 15px;
+            border: 1px solid #444;
+        }
         video { 
-            width: 800px; 
+            width: 100%; 
+            max-width: 900px;
             background: #000; 
             border: 2px solid #444;
         }
-        .link-container {
-            text-align: left;
-            display: inline-block;
-            max-width: 800px;
-            width: 100%;
+        .seek-controls {
+            margin-top: 15px;
+            background: #333;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        input[type="number"] {
+            padding: 10px;
+            width: 100px;
+            font-size: 1.2rem;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            background: #00bfff;
+            border: none;
+            color: white;
         }
         .movie-link {
             display: block;
-            padding: 15px;
+            padding: 12px;
             color: #00bfff;
             text-decoration: none;
-            font-size: 1.2rem;
+            font-size: 1.1rem;
             border-bottom: 1px solid #333;
         }
-        /* Critical for TV remote navigation */
-        .movie-link:focus {
+        .movie-link:focus, button:focus, input:focus {
             background: #ffffff;
             color: #000000;
-            outline: none;
+            outline: 3px solid orange;
         }
     </style>
 </head>
 <body>
 
-    <div id="player-wrapper">
-        <video id="tvPlayer" controls>
-            Your TV browser is too old to support the HTML5 video tag.
-        </video>
-    </div>
+    <div class="main-container">
+        <div id="left-col" class="column">
+            <video id="tvPlayer" controls>
+                Your TV browser is too old for HTML5 video.
+            </video>
+            
+            <div class="seek-controls">
+                <label>Seek to (minutes): </label>
+                <input type="number" id="seekTime" value="0" min="0">
+                <button onclick="manualSeek()">Go</button>
+            </div>
+        </div>
 
-    <div class="link-container">
-        <h3>Select a Movie:</h3>
-        ${movieLinks}
+        <div id="right-col" class="column">
+            <h3 style="margin-top:0;">Movies</h3>
+            <div style="max-height: 80vh; overflow-y: auto;">
+                ${movieLinks}
+            </div>
+        </div>
     </div>
 
     <script>
+        var player = document.getElementById('tvPlayer');
+
         function playVideo(url) {
-            var player = document.getElementById('tvPlayer');
             player.src = url;
-            player.load(); // Forces the player to update
+            player.load();
             player.play();
-            // Scroll back to top so user sees the video
-            window.scrollTo(0,0);
+        }
+
+        function manualSeek() {
+            var minutes = document.getElementById('seekTime').value;
+            var seconds = parseInt(minutes) * 60;
+            
+            if (!isNaN(seconds)) {
+                // Some old browsers require the video to be playing/loaded before seeking
+                player.currentTime = seconds;
+            }
         }
     </script>
 
