@@ -13,6 +13,8 @@ const s3Client = new S3Client({
 async function build() {
   const response = await s3Client.send(new ListObjectsV2Command({ Bucket: process.env.R2_BUCKET_NAME }));
   const movies = response.Contents?.filter(f => !f.Key?.endsWith('/')) || [];
+
+  console.log(`bucket name ${process.env.R2_BUCKET_NAME}`);
   
   const movieLinks = movies.map(m => {
     const videoUrl = `${process.env.R2_PUBLIC_URL}/${m.Key}`;
