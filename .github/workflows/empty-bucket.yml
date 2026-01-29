@@ -17,10 +17,10 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm install @aws-sdk/client-s3 ts-node typescript
+        run: npm install @aws-sdk/client-s3 tsx
 
       - name: Run deletion script
-        run: npx ts-node delete-bucket.ts
+        run: npx tsx delete-bucket.ts
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
