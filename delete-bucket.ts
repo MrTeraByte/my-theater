@@ -12,7 +12,7 @@ const s3 = new S3Client({
 async function emptyBucket() {
   let truncated = true;
   let continuationToken: string | undefined;
-  let bucketName = process.env.R2_BUCKET_NAME!;
+  let bucketName = process.env.R2_BUCKET_NAME;
 
   console.log(`Emptying bucket: ${bucketName}`);
 
