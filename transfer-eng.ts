@@ -15,29 +15,44 @@ const r2Client = new S3Client({
 });
 
 async function processAndUpload(videoUrl: string, fileName: string) {
-  // Use the 'runner' temp directory which usually has the most space
-  const localTempFile = path.join(process.cwd(), `temp_output.mp4`);
+  // Using the system temp directory is often safer for large writes
+  const localTempFile = path.join(process.env.RUNNER_TEMP || process.cwd(), `output_${Date.now()}.mp4`);
 
   try {
-    console.log(`Starting processing for: ${fileName}`);
+    console.log(`Processing: ${videoUrl}`);
 
     await new Promise((resolve, reject) => {
-      ffmpeg(videoUrl) // FFmpeg reads directly from the URL (saves 5GB disk space)
-        .outputOptions([
-          "-map 0:v:0",
-          "-map 0:a:m:language:eng", // Select English
-          "-c copy",                  // Fast, no CPU heat
-          "-disposition:a:0 default", 
-          "-movflags +faststart"      // Essential for TV/Web seeking
+      ffmpeg()
+        .input(videoUrl)
+        // Network robustness flags to prevent SIGSEGV on stream hiccups
+        .inputOptions([
+          '-reconnect 1',
+          '-reconnect_at_eof 1',
+          '-reconnect_streamed 1',
+          '-reconnect_delay_max 4',
+          '-err_detect ignore_err' // Skip minor corruptions in the stream
         ])
-        .on("start", (cmd) => console.log("FFmpeg started..."))
-        .on("progress", (p) => console.log(`Processing: ${p.percent}% done`))
-        .on("error", (err) => reject(err))
+        .outputOptions([
+          "-map 0:v:0",                 // Video
+          "-map 0:a:m:language:eng",    // English Audio
+          "-c copy",                    // No transcoding
+          "-disposition:a:0 default", 
+          "-movflags +faststart",       // Metadata to front
+          "-bsf:a aac_adtstoasc"        // Fixes bitstream headers for MP4 container
+        ])
+        .on("start", (cmd) => console.log("FFmpeg command initiated."))
+        .on("progress", (p) => {
+          if (p.percent) console.log(`Processing: ${p.percent.toFixed(2)}%`);
+        })
+        .on("error", (err) => {
+          console.error("FFmpeg Error details:", err);
+          reject(err);
+        })
         .on("end", () => resolve(true))
-        .save(localTempFile); // Only THIS file takes up disk space
+        .save(localTempFile);
     });
 
-    console.log("Processing finished. Starting upload to R2...");
+    console.log("Processing finished. Beginning R2 Upload...");
     
     const fileStream = fs.createReadStream(localTempFile);
     const upload = new Upload({
@@ -48,8 +63,9 @@ async function processAndUpload(videoUrl: string, fileName: string) {
         Body: fileStream,
         ContentType: "video/mp4",
       },
-      queueSize: 4, // Upload parts in parallel
-      partSize: 10 * 1024 * 1024, // 10MB chunks
+      // Higher part size is better for 5GB+ files
+      partSize: 20 * 1024 * 1024, 
+      queueSize: 4,
     });
 
     upload.on("httpUploadProgress", (p) => {
@@ -60,12 +76,11 @@ async function processAndUpload(videoUrl: string, fileName: string) {
     console.log("🚀 Success! Uploaded to R2.");
 
   } catch (err) {
-    console.error("Workflow failed:", err);
+    console.error("Workflow failed with error:", err);
     process.exit(1);
   } finally {
     if (fs.existsSync(localTempFile)) {
       fs.unlinkSync(localTempFile);
-      console.log("Cleaned up local temp file.");
     }
   }
 }
