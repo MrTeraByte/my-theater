@@ -1,9 +1,7 @@
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { spawn } from "child_process";
-import axios from "axios";
-import fs from "fs";
-import path from "path";
+import { PassThrough } from "stream";
 
 const r2Client = new S3Client({
   region: "auto",
@@ -15,62 +13,51 @@ const r2Client = new S3Client({
   },
 });
 
-// Helper to run FFmpeg as a Promise
-const runFFmpeg = (args: string[]) => {
-  return new Promise((resolve, reject) => {
-    const process = spawn("ffmpeg", args);
-    process.stderr.on("data", (data) => console.log(`FFmpeg: ${data.toString().trim()}`));
-    process.on("close", (code) => (code === 0 ? resolve(true) : reject(`FFmpeg failed with code ${code}`)));
-  });
-};
-
 async function uploadVideo(videoUrl: string, fileName: string) {
-  const tempInput = path.join(__dirname, "input_video.mp4");
-  const tempOutput = path.join(__dirname, "output_video.mp4");
-
   try {
-    // 1. Download the file to disk
-    console.log("--- Step 1: Downloading file to disk ---");
-    const response = await axios({
-      method: 'get',
-      url: videoUrl,
-      responseType: 'stream',
-    });
-    
-    const writer = fs.createWriteStream(tempInput);
-    response.data.pipe(writer);
-    await new Promise((resolve, reject) => {
-      writer.on('finish', resolve);
-      writer.on('error', reject);
-    });
-    console.log("Download finished.");
+    console.log("Starting direct FFmpeg stream...");
 
-    // 2. Process with FFmpeg
-    console.log("--- Step 2: Setting English as default audio ---");
+    const uploadStream = new PassThrough();
+
     /**
-     * -disposition:a 0 -> Clears all default flags
-     * -disposition:a:m:language:eng default -> Sets any 'eng' track to default
-     * -movflags +faststart -> Optimizes for web/TV playback
+     * Why this version is different:
+     * 1. We pass the URL directly to -i (input).
+     * 2. FFmpeg will use HTTP Range requests to find metadata.
+     * 3. -reconnect 1 helps if the connection drops.
      */
-    await runFFmpeg([
-      "-i", tempInput,
+    const ffmpeg = spawn("ffmpeg", [
+      "-reconnect", "1",
+      "-reconnect_streamed", "1",
+      "-reconnect_delay_max", "5",
+      "-headers", "User-Agent: Mozilla/5.0\r\n", 
+      "-i", videoUrl,
       "-map", "0",
       "-c", "copy",
-      "-disposition:a", "0",
+      "-disposition:a", "0", 
       "-disposition:a:m:language:eng", "default",
-      "-movflags", "+faststart",
-      tempOutput
+      "-f", "mp4",
+      "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+      "pipe:1",
     ]);
 
-    // 3. Upload to R2
-    console.log("--- Step 3: Uploading to R2 ---");
-    const fileStream = fs.createReadStream(tempOutput);
+    // Handle FFmpeg output to uploadStream
+    ffmpeg.stdout.pipe(uploadStream);
+
+    // Capture logs for debugging
+    ffmpeg.stderr.on("data", (data) => {
+      const msg = data.toString();
+      // Only log actual errors or stream info to keep output clean
+      if (msg.toLowerCase().includes("error") || msg.includes("Stream #")) {
+        console.log(`FFmpeg: ${msg.trim()}`);
+      }
+    });
+
     const upload = new Upload({
       client: r2Client,
       params: {
         Bucket: process.env.R2_BUCKET_NAME,
         Key: fileName,
-        Body: fileStream,
+        Body: uploadStream,
         ContentType: "video/mp4",
       },
     });
@@ -85,10 +72,7 @@ async function uploadVideo(videoUrl: string, fileName: string) {
 
   } catch (err) {
     console.error("Transfer failed:", err);
-  } finally {
-    // Cleanup temporary files to keep the runner clean
-    if (fs.existsSync(tempInput)) fs.unlinkSync(tempInput);
-    if (fs.existsSync(tempOutput)) fs.unlinkSync(tempOutput);
+    process.exit(1);
   }
 }
 
