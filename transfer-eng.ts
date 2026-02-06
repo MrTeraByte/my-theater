@@ -2,6 +2,7 @@ import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { spawn } from "child_process";
 import { PassThrough } from "stream";
+import axios from "axios";
 
 const r2Client = new S3Client({
   region: "auto",
@@ -15,40 +16,53 @@ const r2Client = new S3Client({
 
 async function uploadVideo(videoUrl: string, fileName: string) {
   try {
-    console.log("Starting FFmpeg processing stream...");
+    console.log("Fetching video stream via Axios...");
+    
+    // Get the source stream using Axios (handles Google URLs better)
+    const response = await axios({
+      method: 'get',
+      url: videoUrl,
+      responseType: 'stream',
+      headers: {
+        'User-Agent': 'Mozilla/5.0' // Sometimes needed for Google storage URLs
+      }
+    });
 
-    // PassThrough stream acts as a bridge between FFmpeg output and R2 upload
     const uploadStream = new PassThrough();
 
     /**
-     * FFmpeg Command Explained:
-     * -i: Input URL
-     * -map 0: Copy all streams (video, all audio, subtitles)
-     * -c copy: Do not re-encode (super fast, preserves quality)
-     * -disposition:a 0: Clear 'default' status from all audio tracks
-     * -disposition:a:m:language:eng default: Set track with language 'eng' to default
-     * -f mp4: Force MP4 output format
-     * -movflags frag_keyframe+empty_moov+default_base_moof: Allows streaming MP4 output
+     * FFmpeg Logic:
+     * -i pipe:0 -> Read from stdin (the Axios stream)
+     * -map 0 -> Keep all tracks
+     * -c copy -> Don't re-encode (fast)
+     * -disposition:a 0 -> Reset all audio defaults
+     * -disposition:a:m:language:eng default -> Set English as default
      */
     const ffmpeg = spawn("ffmpeg", [
-      "-i", videoUrl,
+      "-i", "pipe:0",
       "-map", "0",
       "-c", "copy",
-      "-disposition:a", "0", 
+      "-disposition:a", "0",
       "-disposition:a:m:language:eng", "default",
       "-f", "mp4",
       "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-      "pipe:1", // Output to stdout
+      "pipe:1",
     ]);
 
-    // Pipe FFmpeg output to our PassThrough stream
+    // Pipe Axios -> FFmpeg
+    response.data.pipe(ffmpeg.stdin);
+
+    // Pipe FFmpeg -> Upload Stream
     ffmpeg.stdout.pipe(uploadStream);
 
-    // Log FFmpeg errors for debugging
+    // Capture FFmpeg errors for debugging
+    let ffmpegLogs = "";
     ffmpeg.stderr.on("data", (data) => {
-      if (data.toString().includes("Error")) {
-        console.error(`FFmpeg Log: ${data}`);
-      }
+      ffmpegLogs += data.toString();
+    });
+
+    ffmpeg.on("error", (err) => {
+      console.error("FFmpeg Process Error:", err);
     });
 
     const upload = new Upload({
@@ -62,11 +76,13 @@ async function uploadVideo(videoUrl: string, fileName: string) {
     });
 
     upload.on("httpUploadProgress", (progress) => {
-      console.log(`Uploaded: ${(progress.loaded / (1024 * 1024)).toFixed(2)} MB`);
+      const mb = (progress.loaded || 0) / 1024 / 1024;
+      console.log(`Uploaded: ${mb.toFixed(2)} MB`);
     });
 
     await upload.done();
-    console.log("Upload complete! English is now the default audio.");
+    console.log("Upload complete!");
+
   } catch (err) {
     console.error("Transfer failed:", err);
     process.exit(1);
@@ -74,9 +90,4 @@ async function uploadVideo(videoUrl: string, fileName: string) {
 }
 
 const [videoUrl, fileName] = process.argv.slice(2);
-if (!videoUrl || !fileName) {
-  console.error("Usage: ts-node transfer.ts <url> <filename>");
-  process.exit(1);
-}
-
 uploadVideo(videoUrl, fileName);
