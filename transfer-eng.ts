@@ -16,43 +16,50 @@ const r2Client = new S3Client({
 
 async function uploadVideo(videoUrl: string, fileName: string) {
   try {
-    console.log("Starting English-only stream transfer...");
+    console.log("Starting stream transfer with English as default...");
 
+    // 1. Get the source stream
     const response = await axios({
       method: 'get',
       url: videoUrl,
       responseType: 'stream'
     });
 
+    // 2. Create a bridge to pass FFmpeg output to the S3 Upload
     const ffmpegOutputBridge = new PassThrough();
 
-    const command = ffmpeg(response.data)
+    // 3. Process the stream
+    ffmpeg(response.data)
       .outputOptions([
-        "-map 0:v:0",             // Keep the first video track
-        "-map 0:a:m:language:eng", // ONLY keep English audio tracks
-        "-c copy",                // Copying is fast and uses 0% CPU for re-encoding
-        "-f mp4",
-        "-movflags frag_keyframe+empty_moov+default_base_moof"
+        "-map 0",                            // Keep all streams (Video, All Audios, Subs)
+        "-c copy",                           // Direct stream copy (No re-encoding)
+        "-disposition:a 0",                  // Turn off 'default' for all audio tracks
+        "-disposition:a:m:language:eng default", // Set English as the default
+        "-f matroska"                        // Pipe-friendly container
       ])
-      .on("error", (err) => console.error("FFmpeg Error:", err))
-      .on("end", () => console.log("Processing finished."));
+      .on("error", (err) => {
+        console.error("FFmpeg Error:", err.message);
+      })
+      .pipe(ffmpegOutputBridge);
 
-    command.pipe(ffmpegOutputBridge);
-
+    // 4. Upload to R2
     const upload = new Upload({
       client: r2Client,
       params: {
         Bucket: process.env.R2_BUCKET_NAME!,
-        Key: fileName,
+        Key: fileName, // Use the original filename (e.g., .mkv or .mp4)
         Body: ffmpegOutputBridge,
-        ContentType: "video/mp4",
+        ContentType: "video/x-matroska", // Matroska is safer for stream-piping
       },
     });
 
-    upload.on("httpUploadProgress", (p) => console.log(`Uploaded: ${p.loaded} bytes`));
+    upload.on("httpUploadProgress", (p) => {
+      console.log(`Uploaded: ${((p.loaded || 0) / 1024 / 1024).toFixed(2)} MB`);
+    });
 
     await upload.done();
-    console.log("Upload complete! All non-English tracks stripped.");
+    console.log("Upload complete! English is now the default audio.");
+
   } catch (err) {
     console.error("Transfer failed:", err);
     process.exit(1);
