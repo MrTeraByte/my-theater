@@ -16,53 +16,48 @@ const r2Client = new S3Client({
 
 async function uploadVideo(videoUrl: string, fileName: string) {
   try {
-    console.log("Fetching video stream via Axios...");
-    
-    // Get the source stream using Axios (handles Google URLs better)
+    console.log("Initializing streams...");
+
     const response = await axios({
       method: 'get',
       url: videoUrl,
       responseType: 'stream',
-      headers: {
-        'User-Agent': 'Mozilla/5.0' // Sometimes needed for Google storage URLs
-      }
+      headers: { 'User-Agent': 'Mozilla/5.0' }
     });
 
     const uploadStream = new PassThrough();
 
-    /**
-     * FFmpeg Logic:
-     * -i pipe:0 -> Read from stdin (the Axios stream)
-     * -map 0 -> Keep all tracks
-     * -c copy -> Don't re-encode (fast)
-     * -disposition:a 0 -> Reset all audio defaults
-     * -disposition:a:m:language:eng default -> Set English as default
-     */
+    // FFmpeg settings for streaming MP4
     const ffmpeg = spawn("ffmpeg", [
-      "-i", "pipe:0",
-      "-map", "0",
-      "-c", "copy",
-      "-disposition:a", "0",
-      "-disposition:a:m:language:eng", "default",
+      "-probesize", "10M",             // Give FFmpeg more data to figure out tracks
+      "-analyzeduration", "10M",
+      "-i", "pipe:0",                  // Input from stdin
+      "-map", "0",                     // Copy all streams
+      "-c", "copy",                    // No re-encoding
+      "-disposition:a", "0",           // Reset defaults
+      "-disposition:a:m:language:eng", "default", // Set English
       "-f", "mp4",
       "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-      "pipe:1",
+      "pipe:1",                        // Output to stdout
     ]);
+
+    // PREVENT EPIPE: If FFmpeg dies, stop Axios from pushing data
+    response.data.on("error", (err: any) => console.error("Axios Stream Error:", err.message));
+    ffmpeg.stdin.on("error", (err: any) => {
+        console.error("FFmpeg Stdin Error (Pipe Closed):", err.message);
+        response.data.destroy(); // Stop the download immediately
+    });
 
     // Pipe Axios -> FFmpeg
     response.data.pipe(ffmpeg.stdin);
 
-    // Pipe FFmpeg -> Upload Stream
+    // Pipe FFmpeg -> Upload
     ffmpeg.stdout.pipe(uploadStream);
 
-    // Capture FFmpeg errors for debugging
-    let ffmpegLogs = "";
+    // Monitor FFmpeg logs to see why it fails
     ffmpeg.stderr.on("data", (data) => {
-      ffmpegLogs += data.toString();
-    });
-
-    ffmpeg.on("error", (err) => {
-      console.error("FFmpeg Process Error:", err);
+      const log = data.toString();
+      if (log.includes("Error")) console.error(`FFmpeg Log: ${log.trim()}`);
     });
 
     const upload = new Upload({
@@ -81,7 +76,7 @@ async function uploadVideo(videoUrl: string, fileName: string) {
     });
 
     await upload.done();
-    console.log("Upload complete!");
+    console.log("Upload finished successfully!");
 
   } catch (err) {
     console.error("Transfer failed:", err);
