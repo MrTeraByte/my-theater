@@ -16,11 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-          # This automatically caches npm dependencies based on package-lock.json
           cache: 'npm'
 
       # 1. Cache FFmpeg Binary
