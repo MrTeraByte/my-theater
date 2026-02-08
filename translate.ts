@@ -53,7 +53,7 @@ class MovieProcessor {
     ];
 
     return new Promise((resolve, reject) => {
-      const ffmpeg = spawn('ffmpeg', args);
+      const ffmpeg = spawn('ffmpeg', args, { shell: true });
 
       response.data.pipe(ffmpeg.stdin);
 
