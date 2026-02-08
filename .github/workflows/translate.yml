@@ -15,15 +15,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
+          # This automatically caches npm dependencies based on package-lock.json
+          cache: 'npm'
 
+      # 1. Cache FFmpeg Binary
+      - name: Cache FFmpeg
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/bin/ffmpeg
+          key: ${{ runner.os }}-ffmpeg-v3
+
+      # 2. Setup FFmpeg (Only runs if cache-ffmpeg misses)
+      - name: Setup FFmpeg
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        uses: federicocarboni/setup-ffmpeg@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 3. Install dependencies (Uses cache from setup-node above)
       - name: Install dependencies
         run: npm install @aws-sdk/client-s3 @aws-sdk/lib-storage axios typescript tsx
 
       - name: Verify FFmpeg
-        run: which ffmpeg && ffmpeg -version
+        run: ffmpeg -version
 
       - name: Run Script
         env:
