@@ -44,9 +44,10 @@ class MovieProcessor {
 
     const args = [
       '-i', 'pipe:0',
-      '-map', '0:v', '-map', '0:a',
-      '-sn', '-c', 'copy',
-      '-disposition:a:0', '0', '-disposition:a:1', 'default',
+      '-map', '0:v:0',      // Select the first video track
+      '-map', '0:a:1',      // Select the SECOND audio track specifically
+      '-sn',                // Strip subtitles (as per your original code)
+      '-c', 'copy',         // Copy streams without re-encoding
       '-movflags', '+faststart',
       this.tempPath,
       '-y'
